@@ -1,0 +1,465 @@
+=head1 NAME
+
+generate-apng - Create Animated PNG files from individual PNG images
+
+=head1 SYNOPSIS
+
+B<generate-apng> [I<options>] [I<file>[B<:>I<delay>]] ...
+
+=head1 DESCRIPTION
+
+B<generate-apng> creates Animated PNG (APNG) files from a sequence of PNG images.
+Each frame can have an individual display delay specified in milliseconds.
+
+APNG is a backward-compatible extension of PNG that supports animation, providing
+24-bit images with 8-bit transparency as an alternative to animated GIF files.
+
+=head1 OPTIONS
+
+=head2 Required Options
+
+=over 4
+
+=item B<-o> I<file>, B<--output>=I<file>
+
+Output APNG filename. This option is required.
+
+=back
+
+=head2 Frame Input Options
+
+=over 4
+
+=item B<-d> I<ms>, B<--delay>=I<ms>
+
+Default delay in milliseconds for frames that don't specify their own delay.
+Default: 100 ms.
+
+=item B<-l> I<file>, B<--list>=I<file>
+
+Read frame list from a file. Use C<-> to read from standard input.
+The file should contain one frame per line with format: C<filename delay>
+
+=item I<file>[B<:>I<delay>]
+
+Positional arguments specifying frame files. Optionally append C<:delay> to
+specify frame-specific delay in milliseconds. Files without delay specification
+use the default delay.
+
+=back
+
+=head2 Animation Control Options
+
+=over 4
+
+=item B<-L> I<count>, B<--loop>=I<count>
+
+Number of times to loop the animation. Use 0 for infinite looping.
+Default: 0 (infinite).
+
+=item B<--no-loop>
+
+Play animation once. Equivalent to C<--loop 1>.
+
+=back
+
+=head2 Resolution Options
+
+=over 4
+
+=item B<-n>, B<--normalize>
+
+Normalize all frames to the same resolution. Smaller frames are centered on
+a background canvas.
+
+=item B<--width>=I<pixels>
+
+Target width in pixels. Must be used with B<--height>.
+Automatically enables normalization.
+
+=item B<--height>=I<pixels>
+
+Target height in pixels. Must be used with B<--width>.
+Automatically enables normalization.
+
+=item B<--size>=I<WIDTHxHEIGHT>
+
+Target resolution in format WIDTHxHEIGHT (e.g., 800x600).
+Automatically enables normalization.
+
+=back
+
+=head2 Background Options
+
+=over 4
+
+=item B<-b> I<color>, B<--background>=I<color>
+
+Background color for padding smaller frames when normalizing.
+
+Color formats:
+
+=over 8
+
+=item C<R,G,B,A>
+
+RGBA values (0-255). Example: C<255,255,255,128>
+
+=item C<R,G,B>
+
+RGB values (0-255), alpha defaults to 255. Example: C<255,255,255>
+
+=item C<N>
+
+Grayscale value (0-255), defaults to opaque. Example: C<128>
+
+=item C<transparent>
+
+Fully transparent black (0,0,0,0)
+
+=item C<white>
+
+Opaque white (255,255,255,255)
+
+=item C<black>
+
+Opaque black (0,0,0,255)
+
+=back
+
+Default: transparent (0,0,0,0)
+
+=back
+
+=head2 Optimization Options
+
+=over 4
+
+=item B<-O>, B<--optimize>
+
+Enable palette optimization. Converts frames to 8-bit indexed PNG with up to
+256 colors per frame. Reduces file size but may introduce color banding in
+photographs or gradients.
+
+=back
+
+=head2 Frame Behavior Options
+
+=over 4
+
+=item B<--disposal>=I<mode>
+
+Frame disposal method. Specifies how the frame area is handled after display.
+
+Modes:
+
+=over 8
+
+=item C<none> or C<0>
+
+Frame remains, next frame drawn on top.
+
+=item C<background> or C<1>
+
+Frame area cleared to transparent before next frame (default).
+
+=item C<previous> or C<2>
+
+Restore to state before current frame.
+
+=back
+
+Default: background (1)
+
+=item B<--blend>=I<mode>
+
+Frame blending operation. Specifies how frame is composited onto canvas.
+
+Modes:
+
+=over 8
+
+=item C<source> or C<0>
+
+Frame replaces canvas content completely.
+
+=item C<over> or C<1>
+
+Frame alpha-blended over existing canvas (default).
+
+=back
+
+Default: over (1)
+
+=back
+
+=head2 Output Control Options
+
+=over 4
+
+=item B<-v>, B<--verbose>
+
+Enable verbose output. Shows warnings and detailed processing information.
+
+=item B<-q>, B<--quiet>
+
+Suppress non-error output. Only errors are displayed.
+
+=item B<--force>
+
+Overwrite existing output file without prompting.
+
+=item B<--dry-run>
+
+Show what would be done without creating the output file.
+
+=back
+
+=head2 Help Options
+
+=over 4
+
+=item B<-h>, B<--help>
+
+Display brief usage information and exit.
+
+=item B<--version>
+
+Display version information and exit.
+
+=back
+
+=head1 FRAME LIST FILE FORMAT
+
+Frame list files can be specified with B<--list> option. The file should contain
+one frame per line with the following format:
+
+=over 4
+
+=item Space-separated format
+
+C<filename delay>
+
+Example:
+
+	frame1.png 100
+	frame2.png 150
+	frame3.png 100
+
+=item Colon-separated format
+
+C<filename:delay>
+
+Example:
+
+	frame1.png:100
+	frame2.png:150
+	frame3.png:100
+
+=item Comments
+
+Lines starting with C<#> are treated as comments and ignored.
+Inline comments (C<#> after content) are also supported.
+
+Example:
+
+	# Animation frames
+	frame1.png 100    # Intro
+	frame2.png 150    # Main
+	frame3.png 100    # Outro
+
+=back
+
+Empty lines and whitespace are ignored.
+
+=head1 EXIT STATUS
+
+The program returns the following exit codes:
+
+=over 4
+
+=item B<0>
+
+Success. APNG file created successfully.
+
+=item B<1>
+
+General error. APNG generation failed.
+
+=item B<2>
+
+File error. Input file not found or not readable.
+
+=item B<3>
+
+Invalid options. Command-line options are incorrect or incomplete.
+
+=item B<4>
+
+Output file exists. Use B<--force> to overwrite.
+
+=back
+
+=head1 EXAMPLES
+
+=head2 Simple Animation
+
+Create animation from all PNG files with default 100ms delay:
+
+	generate-apng -o animation.png frame*.png
+
+=head2 Individual Frame Delays
+
+Specify different delay for each frame using colon notation:
+
+	generate-apng -o animation.png \
+		intro.png:500 \
+		action1.png:100 \
+		action2.png:100 \
+		outro.png:1000
+
+=head2 Using Frame List File
+
+Create frames.txt:
+
+	frame1.png 100
+	frame2.png 150
+	frame3.png 100
+
+Generate animation:
+
+	generate-apng -o animation.png --list frames.txt
+
+=head2 Normalized with Background
+
+Create animation with all frames normalized to 800x600 with white background:
+
+	generate-apng -o banner.png \
+		--size 800x600 \
+		--background white \
+		--delay 2000 \
+		banner_*.png
+
+=head2 Optimized for Web
+
+Create optimized animation with palette reduction:
+
+	generate-apng -o web_anim.png \
+		--optimize \
+		--normalize \
+		--size 640x480 \
+		--list frames.txt
+
+=head2 Reading from Standard Input
+
+Generate animation from find command output:
+
+	find . -name "frame*.png" -type f | \
+		generate-apng -o anim.png --list - --delay 100
+
+=head2 Combining List and Arguments
+
+Use frame list and add additional frames:
+
+	generate-apng -o anim.png \
+		--list frames.txt \
+		extra1.png:200 \
+		extra2.png:300
+
+=head2 Loop Three Times
+
+Create animation that plays three times then stops:
+
+	generate-apng -o product.png \
+		--loop 3 \
+		front.png:1000 \
+		side.png:1000 \
+		back.png:1000
+
+=head2 Dry Run
+
+Preview what would be created without generating file:
+
+	generate-apng -o test.png --dry-run --verbose \
+		frame1.png:100 \
+		frame2.png:150
+
+=head1 WARNINGS
+
+=over 4
+
+=item Long Delays
+
+When using B<--verbose>, warnings are displayed for frame delays exceeding
+5000 milliseconds (5 seconds).
+
+=item File Validation
+
+All input files are validated for existence and readability before processing.
+If any file is missing or inaccessible, the program exits with error code 2.
+
+=item Overwrite Protection
+
+By default, the program will not overwrite existing files. Use B<--force> to
+allow overwriting.
+
+=back
+
+=head1 DEPENDENCIES
+
+=over 4
+
+=item Image::APNG
+
+Perl module for APNG generation.
+
+=item Image::Magick
+
+Required by Image::APNG for image manipulation.
+
+=back
+
+=head1 BROWSER SUPPORT
+
+APNG is supported in modern browsers:
+
+=over 4
+
+=item *
+
+Firefox (all versions)
+
+=item *
+
+Chrome/Edge 59+
+
+=item *
+
+Safari 8+
+
+=item *
+
+Opera 46+
+
+=back
+
+For unsupported browsers, the first frame displays as a static PNG image.
+
+=head1 SEE ALSO
+
+L<Image::APNG>, L<convert(1)>, L<png(5)>
+
+APNG Specification: L<https://wiki.mozilla.org/APNG_Specification>
+
+=head1 AUTHOR
+
+APNG Generator Author
+
+=head1 COPYRIGHT
+
+This software is copyright (c) 2025 by the author.
+
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
+
+=cut

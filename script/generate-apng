@@ -1,0 +1,460 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use Getopt::Long qw(:config no_ignore_case bundling);
+use File::Basename;
+use Image::APNG;
+
+our $VERSION = '1.0.0';
+
+main() ;
+
+sub main
+{
+my %options = 
+	(
+	delay      => 100,
+	loop       => 0,
+	normalize  => 0,
+	background => [0, 0, 0, 0],
+	optimize   => 0,
+	disposal   => 1,
+	blend      => 1,
+	verbose    => 0,
+	quiet      => 0,
+	force      => 0,
+	dry_run    => 0
+	) ;
+
+my @frame_specs ;
+my $list_file ;
+my $output_file ;
+my $size_spec ;
+
+GetOptions
+	(
+	'output|o=s'     => \$output_file,
+	'delay|d=i'      => \$options{delay},
+	'list|l=s'       => \$list_file,
+	'loop|L=i'       => \$options{loop},
+	'no-loop'        => sub { $options{loop} = 1 },
+	'normalize|n'    => \$options{normalize},
+	'width=i'        => \$options{width},
+	'height=i'       => \$options{height},
+	'size=s'         => \$size_spec,
+	'background|b=s' => \$options{background_spec},
+	'optimize|O'     => \$options{optimize},
+	'disposal=s'     => \$options{disposal_spec},
+	'blend=s'        => \$options{blend_spec},
+	'verbose|v'      => \$options{verbose},
+	'quiet|q'        => \$options{quiet},
+	'force'          => \$options{force},
+	'dry-run'        => \$options{dry_run},
+	'help|h'         => \&show_usage,
+	'version'        => \&show_version
+	) or exit(3) ;
+
+exit(0) if $options{help_shown} ;
+
+unless ($output_file)
+	{
+	print STDERR "Error: --output is required\n" ;
+	show_usage() ;
+	exit(3) ;
+	}
+
+if (-e $output_file && !$options{force} && !$options{dry_run})
+	{
+	print STDERR "Error: Output file '$output_file' exists. Use --force to overwrite.\n" ;
+	exit(4) ;
+	}
+
+if ($size_spec)
+	{
+	if ($size_spec =~ /^(\d+)x(\d+)$/i)
+		{
+		$options{width}     = $1 ;
+		$options{height}    = $2 ;
+		$options{normalize} = 1 ;
+		}
+	else
+		{
+		print STDERR "Error: Invalid size format. Use WIDTHxHEIGHT (e.g., 800x600)\n" ;
+		exit(3) ;
+		}
+	}
+
+if (($options{width} && !$options{height}) || (!$options{width} && $options{height}))
+	{
+	print STDERR "Error: Both --width and --height must be specified together\n" ;
+	exit(3) ;
+	}
+
+if ($options{width} && $options{height})
+	{
+	$options{normalize} = 1 ;
+	}
+
+if ($options{background_spec})
+	{
+	$options{background} = parse_color($options{background_spec}) ;
+	unless ($options{background})
+		{
+		print STDERR "Error: Invalid background color format\n" ;
+		exit(3) ;
+		}
+	}
+
+if ($options{disposal_spec})
+	{
+	$options{disposal} = parse_disposal($options{disposal_spec}) ;
+	unless (defined $options{disposal})
+		{
+		print STDERR "Error: Invalid disposal mode. Use: none, background, previous, 0, 1, or 2\n" ;
+		exit(3) ;
+		}
+	}
+
+if ($options{blend_spec})
+	{
+	$options{blend} = parse_blend($options{blend_spec}) ;
+	unless (defined $options{blend})
+		{
+		print STDERR "Error: Invalid blend mode. Use: source, over, 0, or 1\n" ;
+		exit(3) ;
+		}
+	}
+
+if ($list_file)
+	{
+	my $frames = read_frame_list($list_file) ;
+	unless ($frames)
+		{
+		exit(2) ;
+		}
+	push @frame_specs, @$frames ;
+	}
+
+for my $arg (@ARGV)
+	{
+	push @frame_specs, parse_frame_spec($arg, $options{delay}) ;
+	}
+
+unless (@frame_specs)
+	{
+	print STDERR "Error: No frames specified. Provide files as arguments or use --list\n" ;
+	show_usage() ;
+	exit(3) ;
+	}
+
+validate_frames(\@frame_specs) or exit(2) ;
+
+check_delays(\@frame_specs, $options{verbose}) ;
+
+if ($options{dry_run})
+	{
+	print "Dry run mode - no file will be created\n" ;
+	print "Output: $output_file\n" ;
+	print "Frames:\n" ;
+	
+	for my $spec (@frame_specs)
+		{
+		printf("  %s (%d ms)\n", $spec->[0], $spec->[1]) ;
+		}
+	
+	print "Options:\n" ;
+	printf("  Loop count: %d\n", $options{loop}) ;
+	printf("  Normalize: %s\n", $options{normalize} ? 'yes' : 'no') ;
+	
+	if ($options{width} && $options{height})
+		{
+		printf("  Target resolution: %dx%d\n", $options{width}, $options{height}) ;
+		}
+	
+	printf("  Background: rgba(%d,%d,%d,%d)\n", @{$options{background}}) ;
+	printf("  Optimize palette: %s\n", $options{optimize} ? 'yes' : 'no') ;
+	printf("  Disposal: %d\n", $options{disposal}) ;
+	printf("  Blend: %d\n", $options{blend}) ;
+	exit(0) ;
+	}
+
+unless ($options{quiet})
+	{
+	printf("Processing %d frame%s...\n", scalar @frame_specs, @frame_specs == 1 ? '' : 's') ;
+	}
+
+my $gen_options = 
+	{
+	loop_count           => $options{loop},
+	normalize_resolution => $options{normalize},
+	background_color     => $options{background},
+	optimize_palette     => $options{optimize},
+	disposal_method      => $options{disposal},
+	blend_operation      => $options{blend}
+	} ;
+
+if ($options{width} && $options{height})
+	{
+	$gen_options->{target_resolution} = [$options{width}, $options{height}] ;
+	}
+
+my $result = Image::APNG::generate(\@frame_specs, $gen_options) ;
+
+if ($result->{status} != 0)
+	{
+	print STDERR "Error: APNG generation failed\n" ;
+	
+	for my $error (@{$result->{errors}})
+		{
+		print STDERR "  $error\n" ;
+		}
+	
+	exit(1) ;
+	}
+
+if (@{$result->{errors}} && $options{verbose})
+	{
+	print STDERR "Warnings:\n" ;
+	
+	for my $error (@{$result->{errors}})
+		{
+		print STDERR "  $error\n" ;
+		}
+	}
+
+open(my $fh, '>', $output_file) or die "Cannot write to $output_file: $!\n" ;
+binmode($fh) ;
+print $fh $result->{data} ;
+close($fh) ;
+
+unless ($options{quiet})
+	{
+	printf("Created %s (%d bytes)\n", $output_file, length($result->{data})) ;
+	}
+
+exit(0) ;
+}
+
+sub show_usage
+{
+print <<'USAGE';
+Usage: generate-apng [options] [file[:delay]] ...
+
+Options:
+  -o, --output FILE       Output APNG filename (required)
+  -d, --delay MS          Default delay in milliseconds (default: 100)
+  -l, --list FILE         Read frame list from file (use - for stdin)
+  -L, --loop COUNT        Loop count (0 = infinite, default: 0)
+      --no-loop           Play once (same as --loop 1)
+  -n, --normalize         Normalize all frames to same resolution
+      --width WIDTH       Target width (requires --height)
+      --height HEIGHT     Target height (requires --width)
+      --size WxH          Target resolution (e.g., 800x600)
+  -b, --background COLOR  Background color (RGBA: R,G,B,A)
+  -O, --optimize          Enable palette optimization
+      --disposal MODE     Disposal method (none|background|previous or 0|1|2)
+      --blend MODE        Blend operation (source|over or 0|1)
+  -v, --verbose           Verbose output
+  -q, --quiet             Suppress non-error output
+      --force             Overwrite existing output file
+      --dry-run           Show what would be done
+  -h, --help              Show this help
+      --version           Show version
+
+Examples:
+  generate-apng -o anim.png -d 100 frame*.png
+  generate-apng -o anim.png frame1.png:100 frame2.png:150
+  generate-apng -o anim.png --list frames.txt
+  find . -name "*.png" | generate-apng -o anim.png --list -
+
+USAGE
+
+$_[0]->{help_shown} = 1 if ref $_[0] ;
+}
+
+sub show_version
+{
+print "generate-apng version $VERSION\n" ;
+exit(0) ;
+}
+
+sub parse_frame_spec
+{
+my ($spec, $default_delay) = @_ ;
+
+if ($spec =~ /^(.+):(\d+)$/)
+	{
+	return [$1, $2] ;
+	}
+else
+	{
+	return [$spec, $default_delay] ;
+	}
+}
+
+sub read_frame_list
+{
+my ($filename) = @_ ;
+my @frames ;
+my $fh ;
+
+if ($filename eq '-')
+	{
+	$fh = \*STDIN ;
+	}
+else
+	{
+	unless (open($fh, '<', $filename))
+		{
+		print STDERR "Error: Cannot open frame list file '$filename': $!\n" ;
+		return undef ;
+		}
+	}
+
+while (my $line = <$fh>)
+	{
+	chomp $line ;
+	$line =~ s/#.*$// ;
+	$line =~ s/^\s+// ;
+	$line =~ s/\s+$// ;
+	
+	next if $line eq '' ;
+	
+	if ($line =~ /^(\S+)\s+(\d+)$/)
+		{
+		push @frames, [$1, $2] ;
+		}
+	elsif ($line =~ /^(\S+):(\d+)$/)
+		{
+		push @frames, [$1, $2] ;
+		}
+	elsif ($line =~ /^(\S+)$/)
+		{
+		print STDERR "Warning: No delay specified for '$1' in list file, skipping\n" ;
+		}
+	else
+		{
+		print STDERR "Warning: Invalid line in list file: $line\n" ;
+		}
+	}
+
+close($fh) unless $filename eq '-' ;
+
+return \@frames ;
+}
+
+sub validate_frames
+{
+my ($frames) = @_ ;
+my $valid = 1 ;
+
+for my $frame (@$frames)
+	{
+	my ($file, $delay) = @$frame ;
+	
+	unless (-f $file)
+		{
+		print STDERR "Error: File not found: $file\n" ;
+		$valid = 0 ;
+		}
+	
+	unless (-r $file)
+		{
+		print STDERR "Error: File not readable: $file\n" ;
+		$valid = 0 ;
+		}
+	}
+
+return $valid ;
+}
+
+sub check_delays
+{
+my ($frames, $verbose) = @_ ;
+
+for my $frame (@$frames)
+	{
+	my ($file, $delay) = @$frame ;
+	
+	if ($delay > 5000 && $verbose)
+		{
+		print STDERR "Warning: Long delay ($delay ms) for frame: $file\n" ;
+		}
+	}
+}
+
+sub parse_color
+{
+my ($spec) = @_ ;
+
+if ($spec =~ /^transparent$/i)
+	{
+	return [0, 0, 0, 0] ;
+	}
+elsif ($spec =~ /^white$/i)
+	{
+	return [255, 255, 255, 255] ;
+	}
+elsif ($spec =~ /^black$/i)
+	{
+	return [0, 0, 0, 255] ;
+	}
+elsif ($spec =~ /^(\d+),(\d+),(\d+),(\d+)$/)
+	{
+	return [$1, $2, $3, $4] ;
+	}
+elsif ($spec =~ /^(\d+),(\d+),(\d+)$/)
+	{
+	return [$1, $2, $3, 255] ;
+	}
+elsif ($spec =~ /^(\d+)$/)
+	{
+	return [$1, $1, $1, 255] ;
+	}
+else
+	{
+	return undef ;
+	}
+}
+
+sub parse_disposal
+{
+my ($spec) = @_ ;
+
+if ($spec =~ /^none$/i || $spec eq '0')
+	{
+	return 0 ;
+	}
+elsif ($spec =~ /^background$/i || $spec eq '1')
+	{
+	return 1 ;
+	}
+elsif ($spec =~ /^previous$/i || $spec eq '2')
+	{
+	return 2 ;
+	}
+else
+	{
+	return undef ;
+	}
+}
+
+sub parse_blend
+{
+my ($spec) = @_ ;
+
+if ($spec =~ /^source$/i || $spec eq '0')
+	{
+	return 0 ;
+	}
+elsif ($spec =~ /^over$/i || $spec eq '1')
+	{
+	return 1 ;
+	}
+else
+	{
+	return undef ;
+	}
+}
+
